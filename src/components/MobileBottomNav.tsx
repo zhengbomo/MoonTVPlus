@@ -68,6 +68,12 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
     // 基础导航项（不包括观影室）
     const items = [
       { icon: Home, label: '首页', href: '/' },
+      // 添加收藏入口（在首页之后）
+      {
+        icon: Star,
+        label: '收藏',
+        href: '/favorites',
+      },
       {
         icon: Film,
         label: '电影',
