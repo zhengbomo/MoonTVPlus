@@ -56,7 +56,8 @@ export interface Favorite {
   origin?: 'vod' | 'live';
   is_completed?: boolean; // 是否已完结
   vod_remarks?: string; // 视频备注信息
-  folder_id?: string; // 收藏夹ID
+  folder_id?: string; // 收藏夹ID(兼容旧数据,新数据存储为JSON数组字符串)
+  folder_ids?: string[]; // 收藏夹ID数组(支持多个收藏夹)
 }
 
 // ---- 收藏夹类型 ----
@@ -95,6 +96,48 @@ interface UserCacheStore {
   skipConfigs?: CacheData<Record<string, SkipConfig>>;
   danmakuFilterConfig?: CacheData<DanmakuFilterConfig>;
   musicPlayRecords?: CacheData<Record<string, MusicPlayRecord>>; // 音乐播放记录
+}
+
+// ---- 辅助函数: 解析和序列化 folder_ids ----
+
+/**
+ * 解析收藏的 folder_ids
+ * 读兼容: 优先读 folder_ids,如不存在则解析 folder_id
+ */
+function parseFolderIds(favorite: any): string[] {
+  // 已经有 folder_ids 数组
+  if (favorite.folder_ids && Array.isArray(favorite.folder_ids)) {
+    return favorite.folder_ids;
+  }
+
+  // 从 folder_id 解析
+  if (favorite.folder_id) {
+    try {
+      const parsed = JSON.parse(favorite.folder_id);
+      return Array.isArray(parsed) ? parsed : [favorite.folder_id];
+    } catch {
+      // 不是JSON,是旧格式单个ID
+      return [favorite.folder_id];
+    }
+  }
+
+  // 没有收藏夹(默认收藏)
+  return [];
+}
+
+/**
+ * 序列化 folder_ids 用于存储
+ * 写迁移: 同时更新 folder_id 和 folder_ids
+ */
+function serializeFolderIds(folderIds: string[]): { folder_id?: string; folder_ids: string[] } {
+  if (!folderIds || folderIds.length === 0) {
+    return { folder_id: undefined, folder_ids: [] };
+  }
+
+  return {
+    folder_id: JSON.stringify(folderIds),
+    folder_ids: folderIds
+  };
 }
 
 // ---- 常量 ----
@@ -1150,7 +1193,18 @@ export async function getAllFavorites(): Promise<Record<string, Favorite>> {
   try {
     const raw = localStorage.getItem(FAVORITES_KEY);
     if (!raw) return {};
-    return JSON.parse(raw) as Record<string, Favorite>;
+    const favorites = JSON.parse(raw) as Record<string, Favorite>;
+
+    // 解析每个收藏的 folder_ids(读兼容)
+    const parsed = Object.entries(favorites).reduce((acc, [key, fav]) => {
+      acc[key] = {
+        ...fav,
+        folder_ids: parseFolderIds(fav)
+      };
+      return acc;
+    }, {} as Record<string, Favorite>);
+
+    return parsed;
   } catch (err) {
     console.error('读取收藏失败:', err);
     triggerGlobalError('读取收藏失败');
@@ -1165,15 +1219,24 @@ export async function getAllFavorites(): Promise<Record<string, Favorite>> {
 export async function saveFavorite(
   source: string,
   id: string,
-  favorite: Favorite
+  favorite: Favorite,
+  folderIds?: string[]  // 新增可选参数
 ): Promise<void> {
   const key = generateStorageKey(source, id);
+
+  // 处理 folder_ids(写迁移)
+  let finalFavorite = { ...favorite };
+  const targetFolderIds = folderIds ?? favorite.folder_ids ?? parseFolderIds(favorite);
+  const serialized = serializeFolderIds(targetFolderIds);
+
+  finalFavorite.folder_id = serialized.folder_id;
+  finalFavorite.folder_ids = serialized.folder_ids;
 
   // 数据库存储模式：乐观更新策略（包括 redis 和 upstash）
   if (STORAGE_TYPE !== 'localstorage') {
     // 立即更新缓存
     const cachedFavorites = cacheManager.getCachedFavorites() || {};
-    cachedFavorites[key] = favorite;
+    cachedFavorites[key] = finalFavorite;
     cacheManager.cacheFavorites(cachedFavorites);
 
     // 触发立即更新事件
@@ -1190,7 +1253,7 @@ export async function saveFavorite(
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ key, favorite }),
+        body: JSON.stringify({ key, favorite: finalFavorite }),
       });
     } catch (err) {
       await handleDatabaseOperationFailure('favorites', err);
@@ -1208,7 +1271,7 @@ export async function saveFavorite(
 
   try {
     const allFavorites = await getAllFavorites();
-    allFavorites[key] = favorite;
+    allFavorites[key] = finalFavorite;
     localStorage.setItem(FAVORITES_KEY, JSON.stringify(allFavorites));
     window.dispatchEvent(
       new CustomEvent('favoritesUpdated', {
@@ -1278,6 +1341,77 @@ export async function deleteFavorite(
     console.error('删除收藏失败:', err);
     triggerGlobalError('删除收藏失败');
     throw err;
+  }
+}
+
+/**
+ * 获取单个收藏
+ */
+export async function getFavorite(
+  source: string,
+  id: string
+): Promise<Favorite | null> {
+  const key = generateStorageKey(source, id);
+  const favorites = await getAllFavorites();
+  return favorites[key] || null;
+}
+
+/**
+ * 更新收藏的收藏夹归属
+ * @param source 来源标识
+ * @param id 资源ID
+ * @param folderIds 新的收藏夹ID数组
+ */
+export async function updateFavoriteFolders(
+  source: string,
+  id: string,
+  folderIds: string[]
+): Promise<void> {
+  const key = generateStorageKey(source, id);
+
+  if (STORAGE_TYPE !== 'localstorage') {
+    // 数据库模式:获取现有收藏并更新
+    const favorites = await getAllFavorites();
+    const existing = favorites[key];
+
+    if (!existing) {
+      throw new Error('收藏不存在');
+    }
+
+    // 如果 folderIds 为空,则删除收藏
+    if (!folderIds || folderIds.length === 0) {
+      await deleteFavorite(source, id);
+      return;
+    }
+
+    // 使用 saveFavorite 更新
+    await saveFavorite(source, id, existing, folderIds);
+  } else {
+    // localStorage 模式
+    const favorites = await getAllFavorites();
+
+    if (!favorites[key]) {
+      throw new Error('收藏不存在');
+    }
+
+    // 如果 folderIds 为空,则删除收藏
+    if (!folderIds || folderIds.length === 0) {
+      await deleteFavorite(source, id);
+      return;
+    }
+
+    const serialized = serializeFolderIds(folderIds);
+    favorites[key].folder_id = serialized.folder_id;
+    favorites[key].folder_ids = serialized.folder_ids;
+
+    localStorage.setItem(FAVORITES_KEY, JSON.stringify(favorites));
+
+    // 触发更新事件
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('favoritesUpdated', { detail: favorites })
+      );
+    }
   }
 }
 

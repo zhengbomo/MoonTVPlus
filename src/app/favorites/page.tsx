@@ -24,6 +24,7 @@ import {
   createFavoriteFolder as createFolder,
   updateFavoriteFolder,
   deleteFavoriteFolder,
+  updateFavoriteFolders,
   FavoriteFolder,
 } from '@/lib/db.client';
 
@@ -42,6 +43,7 @@ interface FavoriteItem {
   search_title?: string;
   origin?: 'vod' | 'live';
   folder_id?: string;
+  folder_ids?: string[]; // 支持多个收藏夹
 }
 
 export default function FavoritesPage() {
@@ -56,6 +58,9 @@ export default function FavoritesPage() {
   );
   const [newFolderName, setNewFolderName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [editingItem, setEditingItem] = useState<(FavoriteItem & { folder_ids: string[] }) | null>(null);
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [selectedFolderIds, setSelectedFolderIds] = useState<string[]>([]);
 
   // 加载收藏数据
   const loadFavorites = async () => {
@@ -81,6 +86,9 @@ export default function FavoritesPage() {
           const playRecord = allPlayRecords[key];
           const currentEpisode = playRecord?.index;
 
+          // 解析 folder_ids(读兼容)
+          const folder_ids = (fav as any).folder_ids || [];
+
           return {
             id,
             source,
@@ -93,7 +101,8 @@ export default function FavoritesPage() {
             search_title: fav?.search_title,
             origin: fav?.origin,
             folder_id: (fav as any).folder_id,
-          } as FavoriteItem;
+            folder_ids,  // 新增
+          } as FavoriteItem & { folder_ids: string[] };
         });
       setFavoriteItems(sorted);
     } catch (error) {
@@ -104,16 +113,28 @@ export default function FavoritesPage() {
   };
 
   // 根据当前选中的收藏夹筛选收藏
-  const filteredFavorites = activeFolder
-    ? favoriteItems.filter((item) => item.folder_id === activeFolder)
-    : favoriteItems;
+  const filteredFavorites = activeFolder === null
+    ? favoriteItems  // "全部收藏"显示所有
+    : favoriteItems.filter((item) => {
+        const ids = item.folder_ids || [];
+        // 空字符串表示"默认收藏夹"
+        return activeFolder === ''
+          ? ids.length === 0 || ids.includes('')
+          : ids.includes(activeFolder);
+      });
 
   // 获取当前收藏夹中的收藏数量
   const getFolderCount = (folderId: string | null) => {
     if (folderId === null) {
-      return favoriteItems.length;
+      return favoriteItems.length; // 全部
     }
-    return favoriteItems.filter((item) => item.folder_id === folderId).length;
+
+    return favoriteItems.filter((item) => {
+      const ids = item.folder_ids || [];
+      return folderId === ''
+        ? ids.length === 0 || ids.includes('')
+        : ids.includes(folderId);
+    }).length;
   };
 
   // 清空所有收藏
@@ -124,6 +145,42 @@ export default function FavoritesPage() {
       setShowConfirmDialog(false);
     } catch (error) {
       console.error('清空收藏失败:', error);
+    }
+  };
+
+  // 切换收藏夹选择
+  const toggleFolderSelection = (folderId: string) => {
+    setSelectedFolderIds(prev =>
+      prev.includes(folderId)
+        ? prev.filter(id => id !== folderId)
+        : [...prev, folderId]
+    );
+  };
+
+  // 打开编辑对话框
+  const handleEditFolders = (item: FavoriteItem & { folder_ids: string[] }) => {
+    setEditingItem(item);
+    setSelectedFolderIds(item.folder_ids || []);
+    setShowEditDialog(true);
+  };
+
+  // 确认编辑
+  const handleConfirmEdit = async () => {
+    if (!editingItem) return;
+
+    try {
+      await updateFavoriteFolders(
+        editingItem.source,
+        editingItem.id,
+        selectedFolderIds
+      );
+
+      // 刷新列表
+      await loadFavorites();
+      setShowEditDialog(false);
+      setEditingItem(null);
+    } catch (err) {
+      console.error('更新失败:', err);
     }
   };
 
@@ -324,13 +381,26 @@ export default function FavoritesPage() {
           ) : (
             <div className='grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 sm:gap-6'>
               {filteredFavorites.map((item) => (
-                <VideoCard
-                  key={item.id + item.source}
-                  query={item.search_title}
-                  {...item}
-                  from='favorite'
-                  type={item.episodes && item.episodes > 1 ? 'tv' : ''}
-                />
+                <div key={`${item.source}+${item.id}`} className='relative group'>
+                  <VideoCard
+                    {...item}
+                    query={item.search_title}
+                    from='favorite'
+                    type={item.episodes && item.episodes > 1 ? 'tv' : ''}
+                  />
+                  {/* 编辑按钮 */}
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleEditFolders(item as FavoriteItem & { folder_ids: string[] });
+                    }}
+                    className='absolute top-2 right-2 p-2 bg-black/60 hover:bg-black/80 rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-10'
+                    title='编辑收藏夹'
+                  >
+                    <Edit2 className='w-4 h-4 text-white' />
+                  </button>
+                </div>
               ))}
             </div>
           )}
@@ -462,6 +532,101 @@ export default function FavoritesPage() {
                     {editingFolder ? '保存' : '创建'}
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* 编辑收藏夹对话框 */}
+      {showEditDialog && editingItem &&
+        createPortal(
+          <div
+            className='fixed inset-0 bg-black bg-opacity-50 z-[9999] flex items-center justify-center p-4'
+            onClick={() => {
+              setShowEditDialog(false);
+              setEditingItem(null);
+            }}
+          >
+            <div
+              className='bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full border border-gray-200 dark:border-gray-700'
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className='p-6'>
+                <div className='flex items-center justify-between mb-4'>
+                  <h3 className='text-lg font-semibold text-gray-900 dark:text-gray-100'>
+                    编辑收藏夹归属
+                  </h3>
+                  <button
+                    onClick={() => {
+                      setShowEditDialog(false);
+                      setEditingItem(null);
+                    }}
+                    className='p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded'
+                  >
+                    <X className='w-5 h-5' />
+                  </button>
+                </div>
+
+                <p className='text-sm text-gray-600 dark:text-gray-400 mb-4'>
+                  {editingItem.title}
+                </p>
+
+                <div className='space-y-2 mb-6 max-h-[50vh] overflow-y-auto'>
+                  {/* 默认收藏夹 */}
+                  <label className='flex items-center gap-3 p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer'>
+                    <input
+                      type='checkbox'
+                      checked={selectedFolderIds.includes('') || selectedFolderIds.length === 0}
+                      onChange={() => toggleFolderSelection('')}
+                      className='w-4 h-4'
+                    />
+                    <Star className='w-5 h-5 text-yellow-500' />
+                    <span className='text-gray-900 dark:text-gray-100'>默认收藏夹</span>
+                  </label>
+
+                  {/* 自定义收藏夹 */}
+                  {folders.map((folder) => (
+                    <label
+                      key={folder.id}
+                      className='flex items-center gap-3 p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer'
+                    >
+                      <input
+                        type='checkbox'
+                        checked={selectedFolderIds.includes(folder.id)}
+                        onChange={() => toggleFolderSelection(folder.id)}
+                        className='w-4 h-4'
+                      />
+                      <Folder className='w-5 h-5 text-blue-500' />
+                      <span className='text-gray-900 dark:text-gray-100'>{folder.name}</span>
+                    </label>
+                  ))}
+                </div>
+
+                <div className='flex gap-3'>
+                  <button
+                    onClick={() => {
+                      setShowEditDialog(false);
+                      setEditingItem(null);
+                    }}
+                    className='flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors'
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={handleConfirmEdit}
+                    className='flex-1 px-4 py-2 text-sm font-medium text-white bg-yellow-500 hover:bg-yellow-600 rounded-lg transition-colors'
+                  >
+                    <Check className='w-4 h-4 inline mr-1' />
+                    保存
+                  </button>
+                </div>
+
+                {selectedFolderIds.length === 0 && (
+                  <p className='text-xs text-gray-500 dark:text-gray-400 text-center mt-3'>
+                    取消所有勾选将从收藏中移除该内容
+                  </p>
+                )}
               </div>
             </div>
           </div>,

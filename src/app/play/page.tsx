@@ -2,9 +2,10 @@
 
 'use client';
 
-import { AlertCircle,Cloud, Heart, Sparkles, X } from 'lucide-react';
+import { AlertCircle,Cloud, Heart, Sparkles, X, Star, Folder } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import {
@@ -36,6 +37,9 @@ import {
   deleteSkipConfig,
   generateStorageKey,
   getAllPlayRecords,
+  getAllFavoriteFolders,
+  updateFavoriteFolders,
+  getFavorite,
   getDanmakuFilterConfig,
   getEpisodeFilterConfig,
   getSkipConfig,
@@ -44,6 +48,7 @@ import {
   savePlayRecord,
   saveSkipConfig,
   subscribeToDataUpdates,
+  FavoriteFolder,
 } from '@/lib/db.client';
 import { getDoubanDetail } from '@/lib/douban.client';
 import { getTMDBImageUrl } from '@/lib/tmdb.search';
@@ -118,6 +123,10 @@ function PlayPageClient() {
 
   // 收藏状态
   const [favorited, setFavorited] = useState(false);
+  const [showFolderDialog, setShowFolderDialog] = useState(false);
+  const [folders, setFolders] = useState<FavoriteFolder[]>([]);
+  const [selectedFolderIds, setSelectedFolderIds] = useState<string[]>([]);
+  const [isLoadingFolders, setIsLoadingFolders] = useState(false);
 
   // 网盘搜索弹窗状态
   const [showPansouDialog, setShowPansouDialog] = useState(false);
@@ -4911,26 +4920,118 @@ function PlayPageClient() {
 
     try {
       if (favorited) {
-        // 如果已收藏，删除收藏
-        await deleteFavorite(currentSourceRef.current, currentIdRef.current);
-        setFavorited(false);
+        // 已收藏:打开编辑对话框
+        await loadFoldersAndCurrentSelection();
       } else {
-        // 如果未收藏，添加收藏
-        await saveFavorite(currentSourceRef.current, currentIdRef.current, {
-          title: videoTitleRef.current,
-          source_name: detailRef.current?.source_name || '',
-          year: detailRef.current?.year || 'unknown',
-          cover: detailRef.current?.poster || '',
-          total_episodes: detailRef.current?.episodes.length || 1,
-          save_time: Date.now(),
-          search_title: searchTitle,
-          is_completed: getSeriesStatus(detailRef.current) === 'completed',
-          vod_remarks: detailRef.current?.vod_remarks,
-        });
+        // 未收藏:打开选择对话框
+        await loadFolders();
+        setSelectedFolderIds([]); // 初始为空
+      }
+      setShowFolderDialog(true);
+    } catch (err) {
+      console.error('操作收藏失败:', err);
+    }
+  };
+
+  // 加载收藏夹列表
+  const loadFolders = async () => {
+    setIsLoadingFolders(true);
+    try {
+      const allFolders = await getAllFavoriteFolders();
+      setFolders(allFolders);
+    } catch (err) {
+      console.error('加载收藏夹失败:', err);
+    } finally {
+      setIsLoadingFolders(false);
+    }
+  };
+
+  // 加载收藏夹列表和当前选择
+  const loadFoldersAndCurrentSelection = async () => {
+    setIsLoadingFolders(true);
+    try {
+      const [allFolders, currentFav] = await Promise.all([
+        getAllFavoriteFolders(),
+        getFavorite(currentSourceRef.current!, currentIdRef.current!)
+      ]);
+
+      setFolders(allFolders);
+      setSelectedFolderIds(currentFav?.folder_ids || []);
+    } catch (err) {
+      console.error('加载数据失败:', err);
+    } finally {
+      setIsLoadingFolders(false);
+    }
+  };
+
+  // 切换收藏夹选择
+  const toggleFolderSelection = (folderId: string) => {
+    setSelectedFolderIds(prev =>
+      prev.includes(folderId)
+        ? prev.filter(id => id !== folderId)
+        : [...prev, folderId]
+    );
+  };
+
+  // 确认保存
+  const handleConfirmFolderSelection = async () => {
+    if (!currentSourceRef.current || !currentIdRef.current) return;
+
+    try {
+      // 如果一个都不选:不收藏或取消收藏
+      if (selectedFolderIds.length === 0) {
+        if (favorited) {
+          await deleteFavorite(currentSourceRef.current, currentIdRef.current);
+          setFavorited(false);
+        }
+        setShowFolderDialog(false);
+        return;
+      }
+
+      if (favorited) {
+        // 更新现有收藏的收藏夹归属
+        await updateFavoriteFolders(
+          currentSourceRef.current,
+          currentIdRef.current,
+          selectedFolderIds
+        );
+      } else {
+        // 新增收藏
+        await saveFavorite(
+          currentSourceRef.current,
+          currentIdRef.current,
+          {
+            title: videoTitleRef.current!,
+            source_name: detailRef.current?.source_name || '',
+            year: detailRef.current?.year || 'unknown',
+            cover: detailRef.current?.poster || '',
+            total_episodes: detailRef.current?.episodes.length || 1,
+            save_time: Date.now(),
+            search_title: searchTitle,
+            is_completed: getSeriesStatus(detailRef.current) === 'completed',
+            vod_remarks: detailRef.current?.vod_remarks,
+          },
+          selectedFolderIds
+        );
         setFavorited(true);
       }
+
+      setShowFolderDialog(false);
     } catch (err) {
-      console.error('切换收藏失败:', err);
+      console.error('保存收藏失败:', err);
+    }
+  };
+
+  // 取消收藏
+  const handleRemoveFavorite = async () => {
+    if (!currentSourceRef.current || !currentIdRef.current) return;
+
+    try {
+      await deleteFavorite(currentSourceRef.current, currentIdRef.current);
+      setFavorited(false);
+      setShowFolderDialog(false);
+    } catch (err) {
+      console.error('取消收藏失败:', err);
     }
   };
 
@@ -8574,6 +8675,101 @@ function PlayPageClient() {
           drawerWidth='w-[400px]'
         />
       )}
+
+      {/* 收藏夹选择对话框 */}
+      {showFolderDialog && typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70"
+            onClick={() => setShowFolderDialog(false)}
+          >
+            <div
+              className="bg-neutral-900 rounded-lg p-6 w-[90%] max-w-md max-h-[80vh] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-white">
+                  {favorited ? '编辑收藏夹' : '选择收藏夹'}
+                </h3>
+                <button
+                  onClick={() => setShowFolderDialog(false)}
+                  className="text-neutral-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {isLoadingFolders ? (
+                <div className="flex justify-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2 mb-6">
+                    {/* 默认收藏夹选项 */}
+                    <label className="flex items-center gap-3 p-3 rounded-lg hover:bg-neutral-800 cursor-pointer transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={selectedFolderIds.includes('')}
+                        onChange={() => toggleFolderSelection('')}
+                        className="w-4 h-4 accent-yellow-500"
+                      />
+                      <Star className="w-5 h-5 text-yellow-500" />
+                      <span className="text-white">默认收藏夹</span>
+                    </label>
+
+                    {/* 自定义收藏夹列表 */}
+                    {folders.map((folder) => (
+                      <label
+                        key={folder.id}
+                        className="flex items-center gap-3 p-3 rounded-lg hover:bg-neutral-800 cursor-pointer transition-colors"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedFolderIds.includes(folder.id)}
+                          onChange={() => toggleFolderSelection(folder.id)}
+                          className="w-4 h-4 accent-blue-500"
+                        />
+                        <Folder className="w-5 h-5 text-blue-500" />
+                        <span className="text-white">{folder.name}</span>
+                      </label>
+                    ))}
+
+                    {folders.length === 0 && (
+                      <p className="text-neutral-400 text-center py-4 text-sm">
+                        暂无自定义收藏夹,可在"我的收藏"页面创建
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex gap-3">
+                    {favorited && (
+                      <button
+                        onClick={handleRemoveFavorite}
+                        className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors font-medium"
+                      >
+                        取消收藏
+                      </button>
+                    )}
+                    <button
+                      onClick={handleConfirmFolderSelection}
+                      className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-medium"
+                    >
+                      确定
+                    </button>
+                  </div>
+
+                  {selectedFolderIds.length === 0 && (
+                    <p className="text-neutral-400 text-xs text-center mt-3">
+                      未选择收藏夹将{favorited ? '取消收藏' : '不收藏'}
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          </div>,
+          document.body
+        )}
     </PageLayout>
   );
 }

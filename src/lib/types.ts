@@ -27,7 +27,8 @@ export interface Favorite {
   origin?: 'vod' | 'live';
   is_completed?: boolean; // 是否已完结
   vod_remarks?: string; // 视频备注信息
-  folder_id?: string; // 收藏夹ID（可选，不设置则为默认收藏夹）
+  folder_id?: string; // 收藏夹ID（可选,不设置则为默认收藏夹）兼容旧数据,新数据存储为JSON数组字符串
+  folder_ids?: string[]; // 收藏夹ID数组（支持多个收藏夹）
 }
 
 // 收藏夹数据结构
