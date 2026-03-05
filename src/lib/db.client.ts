@@ -56,6 +56,16 @@ export interface Favorite {
   origin?: 'vod' | 'live';
   is_completed?: boolean; // 是否已完结
   vod_remarks?: string; // 视频备注信息
+  folder_id?: string; // 收藏夹ID
+}
+
+// ---- 收藏夹类型 ----
+export interface FavoriteFolder {
+  id: string;
+  name: string;
+  cover?: string;
+  created_at: number;
+  updated_at: number;
 }
 
 // ---- 音乐播放记录类型 ----
@@ -2201,6 +2211,191 @@ export async function saveEpisodeFilterConfig(
   } catch (err) {
     console.error('保存集数过滤配置失败:', err);
     throw err;
+  }
+}
+
+// ---------------- 收藏夹相关 API ----------------
+
+/**
+ * 获取用户所有收藏夹
+ */
+export async function getAllFavoriteFolders(): Promise<FavoriteFolder[]> {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+
+  // 数据库存储模式
+  if (STORAGE_TYPE !== 'localstorage') {
+    try {
+      const folders = await fetchFromApi<FavoriteFolder[]>(`/api/favorite-folders`);
+      return folders;
+    } catch (err) {
+      console.error('获取收藏夹失败:', err);
+      triggerGlobalError('获取收藏夹失败');
+      return [];
+    }
+  }
+
+  // localStorage 模式
+  try {
+    const raw = localStorage.getItem('moontv_favorite_folders');
+    if (!raw) return [];
+    return JSON.parse(raw) as FavoriteFolder[];
+  } catch (err) {
+    console.error('读取收藏夹失败:', err);
+    return [];
+  }
+}
+
+/**
+ * 创建收藏夹
+ */
+// 生成 UUID 的备用方案
+function generateUUID(): string {
+  // 优先使用 window.crypto.randomUUID
+  if (typeof window !== 'undefined' && window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+  // 备用方案
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+export async function createFavoriteFolder(
+  name: string,
+  cover?: string
+): Promise<FavoriteFolder | null> {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const folder: FavoriteFolder = {
+    id: generateUUID(),
+    name,
+    cover,
+    created_at: Date.now(),
+    updated_at: Date.now(),
+  };
+
+  // 数据库存储模式
+  if (STORAGE_TYPE !== 'localstorage') {
+    try {
+      await fetchWithAuth('/api/favorite-folders', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(folder),
+      });
+      return folder;
+    } catch (err) {
+      console.error('创建收藏夹失败:', err);
+      triggerGlobalError('创建收藏夹失败');
+      return null;
+    }
+  }
+
+  // localStorage 模式
+  try {
+    const raw = localStorage.getItem('moontv_favorite_folders');
+    const folders: FavoriteFolder[] = raw ? JSON.parse(raw) : [];
+    folders.push(folder);
+    localStorage.setItem('moontv_favorite_folders', JSON.stringify(folders));
+    return folder;
+  } catch (err) {
+    console.error('创建收藏夹失败:', err);
+    return null;
+  }
+}
+
+/**
+ * 更新收藏夹
+ */
+export async function updateFavoriteFolder(
+  folderId: string,
+  updates: {
+    name?: string;
+    cover?: string;
+  }
+): Promise<boolean> {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  // 数据库存储模式
+  if (STORAGE_TYPE !== 'localstorage') {
+    try {
+      await fetchWithAuth(`/api/favorite-folders?id=${encodeURIComponent(folderId)}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(updates),
+      });
+      return true;
+    } catch (err) {
+      console.error('更新收藏夹失败:', err);
+      triggerGlobalError('更新收藏夹失败');
+      return false;
+    }
+  }
+
+  // localStorage 模式
+  try {
+    const raw = localStorage.getItem('moontv_favorite_folders');
+    const folders: FavoriteFolder[] = raw ? JSON.parse(raw) : [];
+    const index = folders.findIndex(f => f.id === folderId);
+    if (index !== -1) {
+      folders[index] = {
+        ...folders[index],
+        ...updates,
+        updated_at: Date.now(),
+      };
+      localStorage.setItem('moontv_favorite_folders', JSON.stringify(folders));
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.error('更新收藏夹失败:', err);
+    return false;
+  }
+}
+
+/**
+ * 删除收藏夹
+ */
+export async function deleteFavoriteFolder(folderId: string): Promise<boolean> {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  // 数据库存储模式
+  if (STORAGE_TYPE !== 'localstorage') {
+    try {
+      await fetchWithAuth(`/api/favorite-folders?id=${encodeURIComponent(folderId)}`, {
+        method: 'DELETE',
+      });
+      return true;
+    } catch (err) {
+      console.error('删除收藏夹失败:', err);
+      triggerGlobalError('删除收藏夹失败');
+      return false;
+    }
+  }
+
+  // localStorage 模式
+  try {
+    const raw = localStorage.getItem('moontv_favorite_folders');
+    const folders: FavoriteFolder[] = raw ? JSON.parse(raw) : [];
+    const filtered = folders.filter(f => f.id !== folderId);
+    localStorage.setItem('moontv_favorite_folders', JSON.stringify(filtered));
+    return true;
+  } catch (err) {
+    console.error('删除收藏夹失败:', err);
+    return false;
   }
 }
 

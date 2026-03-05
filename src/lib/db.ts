@@ -517,6 +517,58 @@ export class DbManager {
     }
   }
 
+  // ---------- 收藏夹相关 ----------
+  async createFavoriteFolder(
+    userName: string,
+    folder: {
+      id: string;
+      name: string;
+      cover?: string;
+    }
+  ): Promise<void> {
+    if (typeof (this.storage as any).createFavoriteFolder === 'function') {
+      const now = Date.now();
+      await (this.storage as any).createFavoriteFolder(userName, {
+        ...folder,
+        created_at: now,
+        updated_at: now,
+      });
+    }
+  }
+
+  async getFavoriteFolder(userName: string, folderId: string): Promise<any | null> {
+    if (typeof (this.storage as any).getFavoriteFolder === 'function') {
+      return (this.storage as any).getFavoriteFolder(userName, folderId);
+    }
+    return null;
+  }
+
+  async getAllFavoriteFolders(userName: string): Promise<any[]> {
+    if (typeof (this.storage as any).getAllFavoriteFolders === 'function') {
+      return (this.storage as any).getAllFavoriteFolders(userName);
+    }
+    return [];
+  }
+
+  async updateFavoriteFolder(
+    userName: string,
+    folderId: string,
+    updates: {
+      name?: string;
+      cover?: string;
+    }
+  ): Promise<void> {
+    if (typeof (this.storage as any).updateFavoriteFolder === 'function') {
+      await (this.storage as any).updateFavoriteFolder(userName, folderId, updates);
+    }
+  }
+
+  async deleteFavoriteFolder(userName: string, folderId: string): Promise<void> {
+    if (typeof (this.storage as any).deleteFavoriteFolder === 'function') {
+      await (this.storage as any).deleteFavoriteFolder(userName, folderId);
+    }
+  }
+
   // ---------- 跳过配置迁移 ----------
   async migrateSkipConfigs(userName: string): Promise<void> {
     if (typeof (this.storage as any).migrateSkipConfigs === 'function') {

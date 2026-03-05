@@ -27,6 +27,16 @@ export interface Favorite {
   origin?: 'vod' | 'live';
   is_completed?: boolean; // 是否已完结
   vod_remarks?: string; // 视频备注信息
+  folder_id?: string; // 收藏夹ID（可选，不设置则为默认收藏夹）
+}
+
+// 收藏夹数据结构
+export interface FavoriteFolder {
+  id: string; // 收藏夹ID
+  name: string; // 收藏夹名称
+  cover?: string; // 封面图（可选）
+  created_at: number; // 创建时间
+  updated_at: number; // 更新时间
 }
 
 // 存储接口
@@ -52,6 +62,15 @@ export interface IStorage {
   deleteFavorite(userName: string, key: string): Promise<void>;
   // 迁移收藏
   migrateFavorites(userName: string): Promise<void>;
+
+  // 收藏夹相关
+  createFavoriteFolder(userName: string, folder: FavoriteFolder): Promise<void>;
+  getFavoriteFolder(userName: string, folderId: string): Promise<FavoriteFolder | null>;
+  getAllFavoriteFolders(userName: string): Promise<FavoriteFolder[]>;
+  updateFavoriteFolder(userName: string, folderId: string, updates: Partial<FavoriteFolder>): Promise<void>;
+  deleteFavoriteFolder(userName: string, folderId: string): Promise<void>;
+  // 迁移收藏夹
+  migrateFavoriteFolders(userName: string): Promise<void>;
 
   // 音乐播放记录相关
   getMusicPlayRecord(userName: string, key: string): Promise<any | null>;

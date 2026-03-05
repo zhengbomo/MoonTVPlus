@@ -12,6 +12,7 @@ import {
   IStorage,
   PlayRecord,
   Favorite,
+  FavoriteFolder,
   SkipConfig,
   DanmakuFilterConfig,
   Notification,
@@ -287,6 +288,116 @@ export class PostgresStorage implements IStorage {
     } catch (err) {
       console.error('PostgresStorage.migrateFavorites error:', err);
     }
+  }
+
+  // ==================== 收藏夹相关 ====================
+
+  async createFavoriteFolder(userName: string, folder: FavoriteFolder): Promise<void> {
+    try {
+      await this.db
+        .prepare(`
+          INSERT INTO favorite_folders (username, id, name, cover, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6)
+        `)
+        .bind(userName, folder.id, folder.name, folder.cover || null, folder.created_at, folder.updated_at)
+        .run();
+    } catch (err) {
+      console.error('PostgresStorage.createFavoriteFolder error:', err);
+      throw err;
+    }
+  }
+
+  async getFavoriteFolder(userName: string, folderId: string): Promise<FavoriteFolder | null> {
+    try {
+      const result = await this.db
+        .prepare('SELECT * FROM favorite_folders WHERE username = $1 AND id = $2')
+        .bind(userName, folderId)
+        .first();
+
+      if (!result) return null;
+      return {
+        id: result.id,
+        name: result.name,
+        cover: result.cover || undefined,
+        created_at: result.created_at,
+        updated_at: result.updated_at,
+      };
+    } catch (err) {
+      console.error('PostgresStorage.getFavoriteFolder error:', err);
+      throw err;
+    }
+  }
+
+  async getAllFavoriteFolders(userName: string): Promise<FavoriteFolder[]> {
+    try {
+      const result = await this.db
+        .prepare('SELECT * FROM favorite_folders WHERE username = $1 ORDER BY created_at ASC')
+        .bind(userName)
+        .all();
+
+      return (result.results || []).map((row: any) => ({
+        id: row.id,
+        name: row.name,
+        cover: row.cover || undefined,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      }));
+    } catch (err) {
+      console.error('PostgresStorage.getAllFavoriteFolders error:', err);
+      throw err;
+    }
+  }
+
+  async updateFavoriteFolder(userName: string, folderId: string, updates: Partial<FavoriteFolder>): Promise<void> {
+    try {
+      const existing = await this.getFavoriteFolder(userName, folderId);
+      if (!existing) {
+        throw new Error('收藏夹不存在');
+      }
+
+      const updated: FavoriteFolder = {
+        ...existing,
+        ...updates,
+        updated_at: Date.now(),
+      };
+
+      await this.db
+        .prepare(`
+          UPDATE favorite_folders
+          SET name = $1, cover = $2, updated_at = $3
+          WHERE username = $4 AND id = $5
+        `)
+        .bind(updated.name, updated.cover || null, updated.updated_at, userName, folderId)
+        .run();
+    } catch (err) {
+      console.error('PostgresStorage.updateFavoriteFolder error:', err);
+      throw err;
+    }
+  }
+
+  async deleteFavoriteFolder(userName: string, folderId: string): Promise<void> {
+    try {
+      // 删除收藏夹
+      await this.db
+        .prepare('DELETE FROM favorite_folders WHERE username = $1 AND id = $2')
+        .bind(userName, folderId)
+        .run();
+
+      // 将该收藏夹下的所有收藏移动到默认收藏夹（移除 folder_id）
+      await this.db
+        .prepare('UPDATE favorites SET folder_id = NULL WHERE username = $1 AND folder_id = $2')
+        .bind(userName, folderId)
+        .run();
+    } catch (err) {
+      console.error('PostgresStorage.deleteFavoriteFolder error:', err);
+      throw err;
+    }
+  }
+
+  // 迁移收藏夹
+  async migrateFavoriteFolders(userName: string): Promise<void> {
+    // 当前版本暂无旧数据需要迁移，直接标记完成
+    console.log(`用户 ${userName} 的收藏夹迁移检查完成`);
   }
 
   // ==================== 辅助方法 ====================

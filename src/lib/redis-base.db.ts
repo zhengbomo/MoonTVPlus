@@ -4,7 +4,7 @@ import { createClient, RedisClientType } from 'redis';
 
 import { AdminConfig } from './admin.types';
 import { RedisAdapter } from './redis-adapter';
-import { Favorite, IStorage, PlayRecord, SkipConfig } from './types';
+import { Favorite, FavoriteFolder, IStorage, PlayRecord, SkipConfig } from './types';
 import { userInfoCache } from './user-cache';
 
 // 搜索历史最大条数
@@ -513,6 +513,81 @@ export abstract class BaseRedisStorage implements IStorage {
     userInfoCache?.delete(userName);
 
     console.log(`用户 ${userName} 的收藏迁移完成`);
+  }
+
+  // ---------- 收藏夹相关 ----------
+  private favoriteFolderListKey(user: string) {
+    return `u:${user}:favorite_folders`; // 存储收藏夹列表
+  }
+
+  async createFavoriteFolder(userName: string, folder: FavoriteFolder): Promise<void> {
+    const key = this.favoriteFolderListKey(userName);
+    const value = JSON.stringify(folder);
+    await this.withRetry(() =>
+      this.adapter.hSet(key, folder.id, value)
+    );
+  }
+
+  async getFavoriteFolder(userName: string, folderId: string): Promise<FavoriteFolder | null> {
+    const key = this.favoriteFolderListKey(userName);
+    const value = await this.withRetry(() =>
+      this.adapter.hGet(key, folderId)
+    );
+    return value ? JSON.parse(value) : null;
+  }
+
+  async getAllFavoriteFolders(userName: string): Promise<FavoriteFolder[]> {
+    const key = this.favoriteFolderListKey(userName);
+    const data = await this.withRetry(() =>
+      this.adapter.hGetAll(key)
+    );
+    const folders: FavoriteFolder[] = [];
+    for (const value of Object.values(data)) {
+      if (value) {
+        folders.push(JSON.parse(value));
+      }
+    }
+    // 按创建时间排序
+    return folders.sort((a, b) => a.created_at - b.created_at);
+  }
+
+  async updateFavoriteFolder(userName: string, folderId: string, updates: Partial<FavoriteFolder>): Promise<void> {
+    const existing = await this.getFavoriteFolder(userName, folderId);
+    if (!existing) {
+      throw new Error('收藏夹不存在');
+    }
+    const updated: FavoriteFolder = {
+      ...existing,
+      ...updates,
+      updated_at: Date.now(),
+    };
+    const key = this.favoriteFolderListKey(userName);
+    await this.withRetry(() =>
+      this.adapter.hSet(key, folderId, JSON.stringify(updated))
+    );
+  }
+
+  async deleteFavoriteFolder(userName: string, folderId: string): Promise<void> {
+    // 删除收藏夹
+    const key = this.favoriteFolderListKey(userName);
+    await this.withRetry(() =>
+      this.adapter.hDel(key, folderId)
+    );
+
+    // 将该收藏夹下的所有收藏移动到默认收藏夹（移除 folder_id）
+    const allFavorites = await this.getAllFavorites(userName);
+    for (const [favKey, fav] of Object.entries(allFavorites)) {
+      if (fav.folder_id === folderId) {
+        const updatedFavorite = { ...fav, folder_id: undefined };
+        await this.setFavorite(userName, favKey, updatedFavorite);
+      }
+    }
+  }
+
+  // 迁移收藏夹（预留接口，当前版本暂无旧数据需要迁移）
+  async migrateFavoriteFolders(userName: string): Promise<void> {
+    // 当前版本暂无旧数据需要迁移，直接标记完成
+    console.log(`用户 ${userName} 的收藏夹迁移检查完成`);
   }
 
   // ---------- 音乐播放记录相关 ----------

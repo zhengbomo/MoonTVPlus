@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any,react-hooks/exhaustive-deps,@typescript-eslint/no-empty-function */
 
-import { ExternalLink, Heart, Info, Link, PlayCircleIcon, Radio, Sparkles, Trash2 } from 'lucide-react';
+import { ExternalLink, Folder, Heart, Info, Link, PlayCircleIcon, Radio, Sparkles, Trash2 } from 'lucide-react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import React, {
@@ -17,9 +17,11 @@ import {
   deleteFavorite,
   deletePlayRecord,
   generateStorageKey,
+  getAllFavoriteFolders,
   isFavorited,
   saveFavorite,
   subscribeToDataUpdates,
+  FavoriteFolder,
 } from '@/lib/db.client';
 import { processImageUrl } from '@/lib/utils';
 import { useLongPress } from '@/hooks/useLongPress';
@@ -116,6 +118,9 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(function VideoCard
   const [showDetailPanel, setShowDetailPanel] = useState(false);
   const [showImageViewer, setShowImageViewer] = useState(false);
   const [showUpcomingInfo, setShowUpcomingInfo] = useState(false); // 控制即将上映倒计时的显示
+  const [showFolderPicker, setShowFolderPicker] = useState(false); // 显示收藏夹选择器
+  const [folders, setFolders] = useState<FavoriteFolder[]>([]); // 收藏夹列表
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null); // 选中的收藏夹
 
   // 检查AI功能是否启用
   useEffect(() => {
@@ -229,19 +234,28 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(function VideoCard
             setFavorited(false);
           }
         } else {
-          // 如果未收藏，添加收藏
-          await saveFavorite(actualSource, actualId, {
-            title: actualTitle,
-            source_name: source_name || '',
-            year: actualYear || '',
-            cover: actualPoster,
-            total_episodes: actualEpisodes ?? 1,
-            save_time: Date.now(),
-          });
-          if (from === 'search') {
-            setSearchFavorited(true);
+          // 如果未收藏，先加载收藏夹列表
+          const folderList = await getAllFavoriteFolders();
+          setFolders(folderList);
+
+          if (folderList.length > 0) {
+            // 有收藏夹，弹出选择框
+            setShowFolderPicker(true);
           } else {
-            setFavorited(true);
+            // 没有收藏夹，直接添加到默认收藏夹
+            await saveFavorite(actualSource, actualId, {
+              title: actualTitle,
+              source_name: source_name || '',
+              year: actualYear || '',
+              cover: actualPoster,
+              total_episodes: actualEpisodes ?? 1,
+              save_time: Date.now(),
+            });
+            if (from === 'search') {
+              setSearchFavorited(true);
+            } else {
+              setFavorited(true);
+            }
           }
         }
       } catch (err) {
@@ -276,6 +290,30 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(function VideoCard
     },
     [from, actualSource, actualId, onDelete]
   );
+
+  // 处理选择收藏夹后保存收藏
+  const handleSaveToFolder = useCallback(async () => {
+    try {
+      await saveFavorite(actualSource, actualId, {
+        title: actualTitle,
+        source_name: source_name || '',
+        year: actualYear || '',
+        cover: actualPoster,
+        total_episodes: actualEpisodes ?? 1,
+        save_time: Date.now(),
+        folder_id: selectedFolderId || undefined,
+      });
+      if (from === 'search') {
+        setSearchFavorited(true);
+      } else {
+        setFavorited(true);
+      }
+      setShowFolderPicker(false);
+      setSelectedFolderId(null);
+    } catch (err) {
+      console.error('保存收藏到收藏夹失败:', err);
+    }
+  }, [actualSource, actualId, actualTitle, source_name, actualYear, actualPoster, actualEpisodes, selectedFolderId, from]);
 
   const handleClick = useCallback(() => {
     // 即将上映的电影：单击显示上映倒计时提示，不跳转
@@ -1539,6 +1577,112 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(function VideoCard
           imageUrl={processImageUrl(actualPoster)}
           alt={actualTitle}
         />
+      )}
+
+      {/* 收藏夹选择器 */}
+      {showFolderPicker && (
+        <div
+          className='fixed inset-0 bg-black bg-opacity-50 z-[9999] flex items-center justify-center p-4'
+          onClick={() => {
+            setShowFolderPicker(false);
+            setSelectedFolderId(null);
+          }}
+        >
+          <div
+            className='bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-sm w-full border border-gray-200 dark:border-gray-700'
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className='p-4 border-b border-gray-200 dark:border-gray-700'>
+              <h3 className='text-lg font-semibold text-gray-900 dark:text-gray-100'>
+                选择收藏夹
+              </h3>
+            </div>
+            <div className='p-4 max-h-60 overflow-y-auto'>
+              {/* 默认收藏夹选项 */}
+              <label
+                className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors ${
+                  selectedFolderId === null
+                    ? 'bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-500'
+                    : 'hover:bg-gray-50 dark:hover:bg-gray-700 border border-transparent'
+                }`}
+                onClick={() => setSelectedFolderId(null)}
+              >
+                <input
+                  type='radio'
+                  name='folder'
+                  checked={selectedFolderId === null}
+                  onChange={() => setSelectedFolderId(null)}
+                  className='hidden'
+                />
+                <div
+                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                    selectedFolderId === null
+                      ? 'border-yellow-500 bg-yellow-500'
+                      : 'border-gray-300 dark:border-gray-600'
+                  }`}
+                >
+                  {selectedFolderId === null && (
+                    <div className='w-2 h-2 rounded-full bg-white' />
+                  )}
+                </div>
+                <Folder className='w-5 h-5 text-gray-500' />
+                <span className='text-gray-900 dark:text-gray-100'>默认收藏夹</span>
+              </label>
+
+              {/* 用户创建的收藏夹 */}
+              {folders.map((folder) => (
+                <label
+                  key={folder.id}
+                  className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors ${
+                    selectedFolderId === folder.id
+                      ? 'bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-500'
+                      : 'hover:bg-gray-50 dark:hover:bg-gray-700 border border-transparent'
+                  }`}
+                  onClick={() => setSelectedFolderId(folder.id)}
+                >
+                  <input
+                    type='radio'
+                    name='folder'
+                    checked={selectedFolderId === folder.id}
+                    onChange={() => setSelectedFolderId(folder.id)}
+                    className='hidden'
+                  />
+                  <div
+                    className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                      selectedFolderId === folder.id
+                        ? 'border-yellow-500 bg-yellow-500'
+                        : 'border-gray-300 dark:border-gray-600'
+                    }`}
+                  >
+                    {selectedFolderId === folder.id && (
+                      <div className='w-2 h-2 rounded-full bg-white' />
+                    )}
+                  </div>
+                  <Folder className='w-5 h-5 text-yellow-500' />
+                  <span className='text-gray-900 dark:text-gray-100'>{folder.name}</span>
+                </label>
+              ))}
+            </div>
+            <div className='p-4 border-t border-gray-200 dark:border-gray-700 flex gap-3'>
+              <button
+                onClick={() => {
+                  setShowFolderPicker(false);
+                  setSelectedFolderId(null);
+                }}
+                className='flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors'
+              >
+                取消
+              </button>
+              <button
+                onClick={handleSaveToFolder}
+                disabled={selectedFolderId === null && folders.length > 0}
+                className='flex-1 px-4 py-2 text-sm font-medium text-white bg-yellow-500 hover:bg-yellow-600 disabled:bg-gray-300 dark:disabled:bg-gray-600 rounded-lg transition-colors'
+              >
+                确定
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );
